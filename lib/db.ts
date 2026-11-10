@@ -307,10 +307,10 @@ export async function appendMessages(
   return withUserLock(userId, async () => {
     let conversation = conversationId ? await getConversation(userId, conversationId) : null;
     if (!conversation) {
-      const firstUser = incoming.find((m) => m.role === "user");
+      const opener = incoming.find((m) => m.role === "user") ?? incoming.find((m) => m.isInitiation);
       conversation = await createConversation(
         userId,
-        firstUser ? titleFromText(firstUser.content) : "Новый чат",
+        opener ? titleFromText(opener.content) : "Новый чат",
       );
     }
     const messages = [...conversation.messages, ...incoming];

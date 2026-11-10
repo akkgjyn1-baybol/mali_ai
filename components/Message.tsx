@@ -5,9 +5,9 @@ import { useEffect, useState } from "react";
 import type { ChatMessage } from "@/lib/types";
 import { IconNewChat } from "./Icons";
 
-export function TypingIndicator() {
+export function TypingIndicator({ label = "печатает…" }: { label?: string }) {
   return (
-    <div className="flex items-center gap-3" aria-label="Мали печатает">
+    <div className="flex items-center gap-3" aria-label={`Мали ${label}`}>
       <div className="h-7 w-7 shrink-0 rounded-full border border-ember/40 bg-ember/15 text-center text-xs leading-7 text-ember">
         М
       </div>
@@ -21,7 +21,7 @@ export function TypingIndicator() {
           />
         ))}
       </div>
-      <span className="text-xs text-silver-500">печатает…</span>
+      <span className="text-xs text-silver-500">{label}</span>
     </div>
   );
 }
@@ -126,7 +126,7 @@ export function Message({
               initial={{ scale: 0 }}
               animate={{ scale: 1 }}
               transition={{ type: "spring", stiffness: 500, damping: 18 }}
-              className="-mt-2.5 mr-2 rounded-full border border-ink-950 bg-[#3a3a3a] px-1.5 py-0.5 text-sm leading-none"
+              className="relative z-10 -mt-3 mr-3 rounded-full border-2 border-ink-950 bg-[#3a3a3a] px-2 py-1 text-base leading-none shadow-md"
               aria-label={`Реакция Мали: ${message.reaction}`}
             >
               {message.reaction}

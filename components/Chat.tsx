@@ -18,6 +18,7 @@ export function Chat() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [drawing, setDrawing] = useState(false);
   const [user, setUser] = useState<User | null>(null);
   const [error, setError] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
@@ -123,45 +124,33 @@ export function Chat() {
   }) {
     const { token, prior, thread, draft, body, restoreInput } = params;
     const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-    try {
-      const res = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      if (token !== epoch.current) return;
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({ error: "Ошибка запроса" }));
-        throw new Error(data.error || `Ошибка ${res.status}`);
-      }
+    const partIds = [draft.id, crypto.randomUUID(), crypto.randomUUID()];
+    let failed = false;
+    const live = () => token === epoch.current && !failed;
 
-      const result = await readTextStream(res, () => {});
-      if (token !== epoch.current) return;
-
-      const parsed = parseReply(result.text);
-      const reply: ReplyMeta = result.reply ?? {
+    const replyFromText = (text: string): ReplyMeta => {
+      const parsed = parseReply(text);
+      return {
         reaction: parsed.reaction,
-        parts: parsed.parts.map((content, i) => ({
-          id: i === 0 ? draft.id : crypto.randomUUID(),
-          content,
-        })),
+        parts: parsed.parts.map((content, i) => ({ id: partIds[i] ?? crypto.randomUUID(), content })),
       };
+    };
+
+    const showReply = async (reply: ReplyMeta) => {
       const lastUser = thread[thread.length - 1];
-      const reacted =
+      let shown =
         reply.reaction && lastUser?.role === "user"
           ? [...thread.slice(0, -1), { ...lastUser, reaction: reply.reaction }]
           : thread;
-
-      let finalThread = reacted;
       for (let i = 0; i < reply.parts.length; i++) {
         const part = reply.parts[i];
         if (i > 0) {
-          setMessages(finalThread);
+          setMessages(shown);
           await sleep(typingDelayMs(part.content));
-          if (token !== epoch.current) return;
+          if (!live()) return shown;
         }
-        finalThread = [
-          ...finalThread,
+        shown = [
+          ...shown,
           {
             ...draft,
             id: part.id,
@@ -170,8 +159,42 @@ export function Chat() {
             ...(part.images?.length ? { images: part.images } : {}),
           },
         ];
-        setMessages(finalThread);
+        setMessages(shown);
       }
+      return shown;
+    };
+
+    // The text arrives before the drawing is ready, so the reply is shown early and patched with images later.
+    const early: { shown: Promise<ChatMessage[]> | null } = { shown: null };
+    try {
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...body, assistantMessageIds: partIds }),
+      });
+      if (token !== epoch.current) return;
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({ error: "Ошибка запроса" }));
+        throw new Error(data.error || `Ошибка ${res.status}`);
+      }
+
+      const result = await readTextStream(res, (text) => {
+        if (early.shown || !live()) return;
+        setDrawing(Boolean(parseReply(text).drawing));
+        early.shown = showReply(replyFromText(text));
+      });
+      if (!live()) return;
+
+      const reply = result.reply ?? replyFromText(result.text);
+      let finalThread = early.shown ? await early.shown : await showReply(reply);
+      if (!live()) return;
+      const serverParts = new Map(reply.parts.map((part) => [part.id, part]));
+      finalThread = finalThread.map((message) => {
+        const part = serverParts.get(message.id);
+        if (!part) return message;
+        return { ...message, content: part.content, ...(part.images?.length ? { images: part.images } : {}) };
+      });
+      setMessages(finalThread);
 
       let createdId = result.conversationId || res.headers.get("X-Conversation-Id");
       if (!createdId) {
@@ -188,6 +211,7 @@ export function Chat() {
       if (user?.id && id) await cacheMessages(user.id, id, finalThread);
       window.dispatchEvent(new Event("mirror:conversations"));
     } catch (err) {
+      failed = true;
       if (token === epoch.current) {
         setMessages(prior);
         if (restoreInput !== undefined) setInput(restoreInput);
@@ -197,6 +221,7 @@ export function Chat() {
       if (token === epoch.current) {
         busyRef.current = false;
         setBusy(false);
+        setDrawing(false);
       }
     }
   }
@@ -343,7 +368,7 @@ export function Chat() {
               />
             ))
           )}
-          {busy ? <TypingIndicator /> : null}
+          {busy ? <TypingIndicator label={drawing ? "рисует…" : "печатает…"} /> : null}
           {error ? <p className="text-sm text-red-300">{error}</p> : null}
         </div>
       </div>

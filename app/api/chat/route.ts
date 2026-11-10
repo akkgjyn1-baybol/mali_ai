@@ -36,15 +36,18 @@ export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const conversationId = searchParams.get("conversationId");
   const fresh = searchParams.get("new") === "1";
-  let conversation = fresh ? null : await getConversation(user.id, conversationId);
+  let conversation = conversationId ? await getConversation(user.id, conversationId) : null;
 
   if (!fresh) {
+    // Without an id the visitor is (re)entering the site: open the chat where Mali is waiting for a reply, else a new one.
     const latest = await getConversation(user.id);
-    const opensLatest = !conversationId || conversation?.id === latest?.id;
-    if (opensLatest) {
+    if (!conversationId && latest?.messages.at(-1)?.isInitiation) conversation = latest;
+    const takesPending = conversation ? conversation.id === latest?.id : !conversationId;
+    if (takesPending) {
+      const openId = conversation?.id ?? null;
       conversation = await withUserLock(user.id, async () => {
         const pending = await claimPendingMessage(user.id);
-        const current = await getConversation(user.id, conversationId ?? latest?.id ?? null);
+        const current = openId ? await getConversation(user.id, openId) : null;
         if (!pending) return current;
         const initiation: ChatMessage = {
           id: randomUUID(),
@@ -84,6 +87,7 @@ export async function POST(req: Request) {
   const requestedId = body.conversationId ? String(body.conversationId) : null;
   const editMessageId = body.editMessageId ? String(body.editMessageId) : null;
   const assistantMessageId = takeId(body.assistantMessageId);
+  const extraPartIds: unknown[] = Array.isArray(body.assistantMessageIds) ? body.assistantMessageIds : [];
   const imageIds: string[] = Array.isArray(body.imageIds)
     ? body.imageIds.filter((id: unknown): id is string => typeof id === "string" && isUuid(id)).slice(0, 4)
     : [];
@@ -189,7 +193,7 @@ export async function POST(req: Request) {
         const { parts, reaction, drawing } = parseReply(assistantText);
         const replyParts: Array<{ id: string; content: string; images?: string[] }> = parts.map(
           (content, i) => ({
-            id: i === 0 ? assistantMessageId : randomUUID(),
+            id: i === 0 ? assistantMessageId : takeId(extraPartIds[i]),
             content,
           }),
         );

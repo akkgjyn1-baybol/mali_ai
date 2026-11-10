@@ -7,7 +7,7 @@ import { ensureDailyMaliState, todaysMaliState } from "./inner-life";
 import { notify } from "./notifications";
 import { buildReachOutPrompt, type ReachOutReason } from "./prompts";
 import { getMemory, kvDel, kvGet, kvSet, kvSetNx } from "./redis";
-import type { ChatMessage, FollowUp, User } from "./types";
+import type { ChatMessage, Conversation, FollowUp, User } from "./types";
 import { hourInTimeZone, todayDate } from "./utils";
 
 const HOUR = 60 * 60 * 1000;
@@ -121,6 +121,16 @@ function pickReason(params: {
   return null;
 }
 
+const ACTIVE_CONVERSATION_HOURS = 3;
+
+/** Mali's message joins the latest chat only if it is still going on or already ends with her unanswered message. */
+function continuesConversation(conversation: Conversation | null, now: number) {
+  const last = conversation?.messages.at(-1);
+  if (!last) return false;
+  if (last.role === "assistant" && last.isInitiation) return true;
+  return now - new Date(last.timestamp).getTime() < ACTIVE_CONVERSATION_HOURS * HOUR;
+}
+
 async function reachOut(user: User, now: number, hour: number) {
   const nextRandomAt = await kvGet<string>(nextRandomKey(user.id));
   if (!nextRandomAt) {
@@ -154,7 +164,7 @@ async function reachOut(user: User, now: number, hour: number) {
     isInitiation: true,
   };
   const latest = await getConversation(user.id);
-  const saved = await appendMessages(user.id, [message], latest?.id);
+  const saved = await appendMessages(user.id, [message], continuesConversation(latest, now) ? latest?.id : null);
   if (picked.reason === "followup" && followUp) await markFollowUpDone(user.id, followUp.id);
   else await scheduleNextRandom(user.id, now);
   await notify(user.id, {
